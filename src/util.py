@@ -1,13 +1,29 @@
 import cartopy
 import pyproj
 import xarray as xr
+import proplot
+import cartopy.io.shapereader as shpreader
+import matplotlib.pyplot as plt
+import numpy as np
+from cartopy.mpl.gridliner import LATITUDE_FORMATTER, LONGITUDE_FORMATTER
 
 model_field_map = {'t2m': 'T_2M', 'prec': 'TOT_PREC',
                    't': 'T', 'relhum': 'RELHUM',
                    'geopotential': 'FI'}
 
 era_field_map = {'t2m': 't2m', 'prec': 'tp',
-                 't': 't'}
+                 't': 't', 'relhum':'r', 'geopotential':'z'}
+
+graph_field_map = {'t2m': '2 M Temperature', 'prec': 'Total Precipitation',
+                   't850': 'Temperature 850 hPa', 't925': 'Temperature 925 hPa',
+                   'relhum850': 'Relative Humidity 850 hPa', 'relhum925': 'Relative Humidity 925 hPa',
+                   'geopotential850': 'Geopotential Height 850 hPa',
+                   'geopotential925': 'Geopotential Height 925 hPa'}
+
+unit_map = {'relhum': '%',
+            't': 'K',
+            't2m': 'K',
+            'prec': 'mm'}
 
 
 class ModelProj():
@@ -22,9 +38,30 @@ class ModelProj():
                                                      pole_latitude=self.pole_latitude, 
                                                      central_rotated_longitude=0).proj4_params
 
-def save_verif_file(da, var, prepath, verif_type):
+        
+def save_score_file(ds, var, level, prepath):
+    
+    if level:
+        file_name = fr'model_{var}_{level}_scores.nc'
+    else:
+        file_name = fr'model_{var}_scores.nc'
+        
+    ds.to_netcdf(prepath + file_name)
+    return file_name + " created"
+
+def save_anom_file(ds, prepath, anom_type):
+    file_name = fr'era_{anom_type}_anomaly.nc'
+    ds.to_netcdf(prepath + file_name)
+    return file_name + " created"
+
+def save_verif_file(da, var, level, prepath, verif_type):
     da.name = var
-    file_name = fr'model_{var}_{verif_type}_verif.nc'
+    
+    if level:
+        file_name = fr'model_{var}_{level}_{verif_type}_verif.nc'
+    else:
+        file_name = fr'model_{var}_{verif_type}_verif.nc'
+        
     da.to_netcdf(prepath + file_name)
     return file_name + " created"
         
@@ -51,9 +88,39 @@ def aggregate_file(da, agg_by, agg_for='6H'):
         
     return da_aggr
 
-def get_model_era_files(var_type, var, start_date, end_date):
+def get_post_processed_score_files(var_type, var, level, prepath):
     """
-    Get the ERA5 and model files
+    Get the post processed score files
+    
+    return score_pp
+    
+    """
+    if level:
+        pp_path = prepath + fr'model_{var}_{level}_scores.nc'
+    else:
+        pp_path = prepath + fr'model_{var}_scores.nc'
+        
+    score_pp = xr.open_dataset(pp_path)
+    return score_pp
+
+def get_post_processed_verif_files(verif_type, var_type, var, level, prepath):
+    """
+    Get the post processed verification files
+    
+    return da_pp
+    
+    """
+    if level:
+        pp_path = prepath + fr'model_{var}_{level}_{verif_type}_verif.nc'
+    else:
+        pp_path = prepath + fr'model_{var}_{verif_type}_verif.nc'
+        
+    da_pp = xr.open_dataset(pp_path)
+    return da_pp
+    
+def get_model_era_files(var_type, var, level, start_date, end_date):
+    """
+    Get the ERA5 (hourly) and model (6-H) files
     
     return da_model, da_era
     
@@ -69,21 +136,10 @@ def get_model_era_files(var_type, var, start_date, end_date):
     da_era = xr.open_dataset(era_path)[var_era].sel(time=slice(start_date, end_date))
     da_model = xr.open_dataset(model_path)[var_model].sel(time=slice(start_date, end_date))
     
-    #da_era = da_era.sel(time=slice(start_date, end_date)).resample(time=aggregate)
-    #da_model = da_model.sel(time=slice(start_date, end_date)).resample(time=aggregate)
-    
-    #if var=='prec':
-    #    da_era = da_era.sum()
-    #    da_model = da_model.sum()
+    if level:
+        da_era = da_era.sel(level=level)
+        da_model = da_model.sel(pressure=level*100) # hPa to Pa
         
-    #    print("Warning: aggregating by monthly sum")
-        
-        
-    #else:
-    #    da_era = da_era.mean()
-    #    da_model = da_model.mean()
-        
-    #    print("Warning: aggregating by monthly mean")
         
     return da_model, da_era
 
@@ -108,8 +164,178 @@ def regrid_match(da_to_match, da_to_be_matched, da_to_match_crs, da_to_be_matche
     
     
     return da_to_match, da_to_be_matched
+
+def get_era_climatology(ds, start_date, end_date, cli_type='month'):
+    """
+    Get the groupbyed climatology of the ERA5 data
+    """
+    
+    ds_slice = ds.sel(time=slice(fr'{start_date}', fr'{end_date}'))
+    return ds_slice.groupby(fr'time.{cli_type}').mean()
         
     
     
+def plot_verif_map(data_df, cmap, vmin, vmax, norm, ticks,
+                   crs_data, graphic_no, var_name,
+                    method, difference_method, fig_array, unit):
+    
+    # graphic features
+    cmap = cmap
+    vmin = vmin
+    vmax = vmax
+    norm = norm
+    ticks = ticks
+
+
+    # projection
+    crs_data = crs_data
+
+    # Create Figure -------------------------
+    fig, axs = proplot.subplots(fig_array, 
+                              aspect=10, axwidth=5, proj=crs_data,
+                              hratios=tuple(np.ones(len(fig_array), dtype=int)),
+                              includepanels=True, hspace=-2.3, wspace=0.15)
+
+    for i in range(graphic_no):
+        axs[i].format(lonlim=(24, 45), latlim=(34, 42),
+                      labels=False, longrid=False, latgrid = False)
+
+
+    # türkiye harici shapeler
+    # Find the China boundary polygon.
+    shpfilename = shpreader.natural_earth(resolution='10m',
+                                                  category='cultural',
+                                                  name='admin_0_countries')
+
+    cts = ['Syria', 'Iraq', 'Iran', 'Azerbaijan', 'Armenia',
+           'Russia', 'Georgia', 'Bulgaria', 'Greece', 'Cyprus',
+           'Northern Cyprus', 'Turkey', 'Albania', 'North Macedonia',
+           'Montenegro', 'Serbia', 'Italy']
+
+
+    for country in shpreader.Reader(shpfilename).records():
+        if country.attributes['ADMIN'] in cts:
+            count_shp = country.geometry
+
+            for i in range(graphic_no):
+                axs[i].add_geometries([count_shp], cartopy.crs.PlateCarree(),
+                                          facecolor='none', edgecolor = 'black',
+                                          linewidth = 0.5, zorder = 2.2,)
+    
+    # graphic
+    for i in range(graphic_no):
+        mesh = axs[i].pcolormesh(data_df['lon'], data_df['lat'],
+                             data_df[i], norm = norm,
+                             cmap = cmap, vmin = vmin, vmax = vmax,
+                             zorder = 2.1)
+
+    # CMAP ----------------------
+
+    cbar = fig.colorbar(mesh, ticks=ticks, loc='b', drawedges = False, shrink=1, space = -1.1, aspect = 30, )
+    cbar.ax.tick_params(labelsize=11, )
+    cbar.set_label(label='{} ({}) | {}'.format(var_name, unit, difference_method), size=16, loc = 'center', y=0.35, weight = 'bold')
+    cbar.outline.set_linewidth(2)
+    cbar.minorticks_off()
+    cbar.ax.get_children()[4].set_color('black')
+    cbar.solids.set_linewidth(1)
+
+
+    # TEXT
+    # Build a rectangle in axes coords
+    left, width = .25, .5
+    bottom, height = .25, .5
+    right = left + width
+    top = bottom + height
+    
+    title_method = data_df.dims[0]
+    for i in range(graphic_no):
+        
+        if method=='Month':
+            axs[i].set_title(r'{}: {}'.format(method, data_df[i][title_method].dt.month.values), fontsize = 12,
+                         loc = 'left', pad = -14, y = 0.01, x=0.020, weight = 'bold',)
+        elif method=='Season':
+            axs[i].set_title(r'{}: {}'.format(method, data_df[i][title_method].season.values), fontsize = 12,
+                         loc = 'left', pad = -14, y = 0.01, x=0.020, weight = 'bold',)
+        
+    # savefig    
     
     
+def plot_score_map(data_df, cmap, vmin, vmax, norm, ticks,
+                   crs_data, graphic_no, var_name,
+                    method, difference_method, fig_array, unit):
+    
+    # graphic features
+    cmap = cmap
+    vmin = vmin
+    vmax = vmax
+    norm = norm
+    ticks = ticks
+
+
+    # projection
+    crs_data = crs_data
+
+    # Create Figure -------------------------
+    fig, axs = proplot.subplots(fig_array, 
+                              aspect=10, axwidth=5, proj=crs_data,
+                              hratios=tuple(np.ones(len(fig_array), dtype=int)),
+                              includepanels=True, hspace=-1.40, wspace=0.15)
+
+    for i in range(graphic_no):
+        axs[i].format(lonlim=(24, 45), latlim=(34, 42),
+                      labels=False, longrid=False, latgrid = False)
+
+
+    # türkiye harici shapeler
+    # Find the China boundary polygon.
+    shpfilename = shpreader.natural_earth(resolution='10m',
+                                                  category='cultural',
+                                                  name='admin_0_countries')
+
+    cts = ['Syria', 'Iraq', 'Iran', 'Azerbaijan', 'Armenia',
+           'Russia', 'Georgia', 'Bulgaria', 'Greece', 'Cyprus',
+           'Northern Cyprus', 'Turkey', 'Albania', 'North Macedonia',
+           'Montenegro', 'Serbia', 'Italy']
+
+
+    for country in shpreader.Reader(shpfilename).records():
+        if country.attributes['ADMIN'] in cts:
+            count_shp = country.geometry
+
+            for i in range(graphic_no):
+                axs[i].add_geometries([count_shp], cartopy.crs.PlateCarree(),
+                                          facecolor='none', edgecolor = 'black',
+                                          linewidth = 0.5, zorder = 2.2,)
+    
+    # graphic
+    for i in range(graphic_no):
+        mesh = axs[i].pcolormesh(data_df['lon'], data_df['lat'],
+                             data_df['rmse'], norm = norm,
+                             cmap = cmap, vmin = vmin, vmax = vmax,
+                             zorder = 2.1)
+
+    # CMAP ----------------------
+
+    cbar = fig.colorbar(mesh, ticks=ticks, loc='b', drawedges = False, shrink=1, space = -1.2, aspect = 50, )
+    cbar.ax.tick_params(labelsize=11, )
+    cbar.set_label(label='{} | {}'.format(var_name, difference_method), size=16, loc = 'center', y=0.35, weight = 'bold')
+    cbar.outline.set_linewidth(2)
+    cbar.minorticks_off()
+    cbar.ax.get_children()[4].set_color('black')
+    cbar.solids.set_linewidth(1)
+
+
+    # TEXT
+    # Build a rectangle in axes coords
+    left, width = .25, .5
+    bottom, height = .25, .5
+    right = left + width
+    top = bottom + height
+    
+    for i in range(graphic_no):
+        
+        
+        axs[i].set_title(r'{}: {}'.format(method, 'rmse'), fontsize = 12, color='white',
+                         loc = 'left', pad = -14, y = 0.01, x=0.020, weight = 'bold',)
+        
+    # savefig    
