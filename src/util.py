@@ -88,6 +88,19 @@ def aggregate_file(da, agg_by, agg_for='6H'):
         
     return da_aggr
 
+def get_post_processed_anomaly_files(anom_type, prepath):
+    """
+    Get the post processed score files
+    
+    return anom_pp
+    
+    """
+    
+    pp_path = prepath + fr'era_{anom_type}_anomaly.nc'
+        
+    anom_pp = xr.open_dataset(pp_path)
+    return anom_pp
+
 def get_post_processed_score_files(var_type, var, level, prepath):
     """
     Get the post processed score files
@@ -175,7 +188,7 @@ def get_era_climatology(ds, start_date, end_date, cli_type='month'):
         
     
     
-def plot_verif_map(data_df, cmap, vmin, vmax, norm, ticks,
+def plot_verif_map(data_df, var_short, cmap, vmin, vmax, norm, ticks,
                    crs_data, graphic_no, var_name,
                     method, difference_method, fig_array, unit):
     
@@ -258,9 +271,11 @@ def plot_verif_map(data_df, cmap, vmin, vmax, norm, ticks,
                          loc = 'left', pad = -14, y = 0.01, x=0.020, weight = 'bold',)
         
     # savefig    
+    plt.savefig(fr'pics/report/{method.lower()}_verif_{var_short}_graph.jpeg',
+                bbox_inches='tight', optimize=False, progressive=True, dpi=300)
     
     
-def plot_score_map(data_df, cmap, vmin, vmax, norm, ticks,
+def plot_score_map(data_df, var_short, cmap, vmin, vmax, norm, ticks,
                    crs_data, graphic_no, var_name,
                     method, difference_method, fig_array, unit):
     
@@ -338,4 +353,92 @@ def plot_score_map(data_df, cmap, vmin, vmax, norm, ticks,
         axs[i].set_title(r'{}: {}'.format(method, 'rmse'), fontsize = 12, color='white',
                          loc = 'left', pad = -14, y = 0.01, x=0.020, weight = 'bold',)
         
+    # savefig   
+    plt.savefig(fr'pics/report/{method.lower()}_rmse_{var_short}_graph.jpeg',
+                bbox_inches='tight', optimize=False, progressive=True, dpi=300)
+    
+def plot_anom_map(data_df, var_short, cmap, vmin, vmax, norm, ticks,
+                   crs_data, graphic_no, var_name,
+                    method, difference_method, fig_array, unit):
+    
+    # graphic features
+    cmap = cmap
+    vmin = vmin
+    vmax = vmax
+    norm = norm
+    ticks = ticks
+
+
+    # projection
+    crs_data = crs_data
+
+    # Create Figure -------------------------
+    fig, axs = proplot.subplots(fig_array, 
+                              aspect=10, axwidth=5, proj=crs_data,
+                              hratios=tuple(np.ones(len(fig_array), dtype=int)),
+                              includepanels=True, hspace=-2.3, wspace=0.15)
+
+    for i in range(graphic_no):
+        axs[i].format(lonlim=(24, 45), latlim=(34, 42),
+                      labels=False, longrid=False, latgrid = False)
+
+
+    # türkiye harici shapeler
+    # Find the China boundary polygon.
+    shpfilename = shpreader.natural_earth(resolution='10m',
+                                                  category='cultural',
+                                                  name='admin_0_countries')
+
+    cts = ['Syria', 'Iraq', 'Iran', 'Azerbaijan', 'Armenia',
+           'Russia', 'Georgia', 'Bulgaria', 'Greece', 'Cyprus',
+           'Northern Cyprus', 'Turkey', 'Albania', 'North Macedonia',
+           'Montenegro', 'Serbia', 'Italy']
+
+
+    for country in shpreader.Reader(shpfilename).records():
+        if country.attributes['ADMIN'] in cts:
+            count_shp = country.geometry
+
+            for i in range(graphic_no):
+                axs[i].add_geometries([count_shp], cartopy.crs.PlateCarree(),
+                                          facecolor='none', edgecolor = 'black',
+                                          linewidth = 0.5, zorder = 2.2,)
+    
+    # graphic
+    for i in range(graphic_no):
+        mesh = axs[i].pcolormesh(data_df['longitude'], data_df['latitude'],
+                             data_df[i], norm = norm,
+                             cmap = cmap, vmin = vmin, vmax = vmax,
+                             zorder = 2.1)
+
+    # CMAP ----------------------
+
+    cbar = fig.colorbar(mesh, ticks=ticks, loc='b', drawedges = False, shrink=1, space = -1.1, aspect = 30, )
+    cbar.ax.tick_params(labelsize=11, )
+    cbar.set_label(label='{} Anomaly ({}) | ERA5'.format(var_name, unit), size=16, loc = 'center', y=0.35, weight = 'bold')
+    cbar.outline.set_linewidth(2)
+    cbar.minorticks_off()
+    cbar.ax.get_children()[4].set_color('black')
+    cbar.solids.set_linewidth(1)
+
+
+    # TEXT
+    # Build a rectangle in axes coords
+    left, width = .25, .5
+    bottom, height = .25, .5
+    right = left + width
+    top = bottom + height
+    
+    title_method = data_df.dims[0]
+    for i in range(graphic_no):
+        
+        if method=='Month':
+            axs[i].set_title(r'{}: {}'.format(method, data_df[i].month.values), fontsize = 12,
+                         loc = 'left', pad = -14, y = 0.01, x=0.020, weight = 'bold',)
+        elif method=='Season':
+            axs[i].set_title(r'{}: {}'.format(method, data_df[i].season.values), fontsize = 12,
+                         loc = 'left', pad = -14, y = 0.01, x=0.020, weight = 'bold',)
+        
     # savefig    
+    plt.savefig(fr'pics/report/{method.lower()}_anom_{var_short}_graph.jpeg',
+                bbox_inches='tight', optimize=False, progressive=True, dpi=300)
