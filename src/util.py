@@ -1,11 +1,16 @@
 import cartopy
-import pyproj
-import xarray as xr
-import proplot
 import cartopy.io.shapereader as shpreader
+from cartopy.mpl.gridliner import LATITUDE_FORMATTER, LONGITUDE_FORMATTER
+#import geopandas as gpd
 import matplotlib.pyplot as plt
 import numpy as np
-from cartopy.mpl.gridliner import LATITUDE_FORMATTER, LONGITUDE_FORMATTER
+import proplot
+#import pyproj
+import rioxarray
+import xarray as xr
+
+
+# VARIABLE NAME MAP DICTIONARIES
 
 model_field_map = {'t2m': 'T_2M', 'prec': 'TOT_PREC',
                    't': 'T', 'relhum': 'RELHUM',
@@ -26,6 +31,8 @@ unit_map = {'relhum': '%',
             'prec': 'mm'}
 
 
+# PROJECTION RELATED FUNCTIONS
+
 class ModelProj():
     
     def __init__(self):
@@ -38,7 +45,48 @@ class ModelProj():
                                                      pole_latitude=self.pole_latitude, 
                                                      central_rotated_longitude=0).proj4_params
 
+def regrid_match(da_to_match, da_to_be_matched, da_to_match_crs, da_to_be_matched_crs):
+    """
+    Regrid a file grid to a target grid. Requires input data array
+    
+    Return target file and regridded file
+    
+    """
+    
+    # set crs for the target grid
+    da_to_match = da_to_match.rio.write_crs(da_to_match_crs)
+    da_to_match = da_to_match.rio.set_spatial_dims(x_dim='rlon', y_dim='rlat')
+    
+    # set crs for the file for which regridding will be performed
+    da_to_be_matched = da_to_be_matched.rio.write_crs(da_to_be_matched_crs)
+    da_to_be_matched = da_to_be_matched.rio.set_spatial_dims(x_dim='longitude', y_dim='latitude')
+    
+    
+    da_to_be_matched = da_to_be_matched.rio.reproject_match(da_to_match).rename({'y':'rlat', 'x':'rlon', })
+    
+    
+    return da_to_match, da_to_be_matched
+
+
+# INDEX CALCULATION FUNCTIONS
         
+def num_days_temp_above_thresh(daily_tmax, threshold):
+    """
+    Number of days where daily maximum temperature is above a threshold
+    """
+    num_data = xr.where(daily_tmax>threshold, 1, 0).sum(dim='time')  
+    return num_data
+
+def num_days_precip_below_thresh(daily_p, threshold):
+    """
+    Number of days where daily precipitation is below a threshold (mm)
+    """
+    num_data = xr.where(daily_p<threshold, 1, 0).sum(dim='time')  
+    return num_data
+        
+
+# FUNCTIONS FOR SAVING DATA
+    
 def save_score_file(ds, var, level, prepath):
     
     if level:
@@ -65,6 +113,9 @@ def save_verif_file(da, var, level, prepath, verif_type):
     da.to_netcdf(prepath + file_name)
     return file_name + " created"
         
+
+# FUNCTIONS FOR PROCESSING DATA
+
 def aggregate_file(da, agg_by, agg_for='6H'):
     """
     Aggregate file on the time dimension (6H by fefault)
@@ -82,11 +133,32 @@ def aggregate_file(da, agg_by, agg_for='6H'):
         da_aggr = da_aggr.mean()
         
         print(fr"Warning: aggregating by {agg_for} mean")
+    
+    elif agg_by=='max':
+        da_aggr = da_aggr.max()
+        
+        print(fr"Warning: aggregating by {agg_for} max")
+    
+    elif agg_by=='min':
+        da_aggr = da_aggr.min()
+        
+        print(fr"Warning: aggregating by {agg_for} min")
         
     else:
-        raise Exception("Sorry, the only aggregation procedures supported are sum and mean")
+        raise Exception("Sorry, the only aggregation procedures supported are sum, mean, max, and min")
         
     return da_aggr
+
+def get_era_climatology(ds, start_date, end_date, cli_type='month'):
+    """
+    Get the groupbyed climatology of the ERA5 data
+    """
+    
+    ds_slice = ds.sel(time=slice(fr'{start_date}', fr'{end_date}'))
+    return ds_slice.groupby(fr'time.{cli_type}').mean()
+
+
+# FUNCTIONSFOR RETRIEVING DATA
 
 def get_post_processed_anomaly_files(anom_type, prepath):
     """
@@ -155,38 +227,9 @@ def get_model_era_files(var_type, var, level, start_date, end_date):
         
         
     return da_model, da_era
-
-def regrid_match(da_to_match, da_to_be_matched, da_to_match_crs, da_to_be_matched_crs):
-    """
-    Regrid a file grid to a target grid. Requires input data array
-    
-    Return target file and regridded file
-    
-    """
-    
-    # set crs for the target grid
-    da_to_match = da_to_match.rio.write_crs(da_to_match_crs)
-    da_to_match = da_to_match.rio.set_spatial_dims(x_dim='rlon', y_dim='rlat')
-    
-    # set crs for the file for which regridding will be performed
-    da_to_be_matched = da_to_be_matched.rio.write_crs(da_to_be_matched_crs)
-    da_to_be_matched = da_to_be_matched.rio.set_spatial_dims(x_dim='longitude', y_dim='latitude')
-    
-    
-    da_to_be_matched = da_to_be_matched.rio.reproject_match(da_to_match).rename({'y':'rlat', 'x':'rlon', })
-    
-    
-    return da_to_match, da_to_be_matched
-
-def get_era_climatology(ds, start_date, end_date, cli_type='month'):
-    """
-    Get the groupbyed climatology of the ERA5 data
-    """
-    
-    ds_slice = ds.sel(time=slice(fr'{start_date}', fr'{end_date}'))
-    return ds_slice.groupby(fr'time.{cli_type}').mean()
         
-    
+
+# FUNCTIONS FOR PLOTTING
     
 def plot_verif_map(data_df, var_short, cmap, vmin, vmax, norm, ticks,
                    crs_data, graphic_no, var_name,
